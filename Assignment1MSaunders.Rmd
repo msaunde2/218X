@@ -1,0 +1,870 @@
+---
+title: "Assignment_One"
+author: "Meg_Saunders"
+date: "22/09/2020"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+```{r read function}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+type_one <- "Electric"
+type_two <- "Gas"
+
+read_data_with_type <- function(type, file_object){
+  years <- 2017:2020
+  quarters <- 1:4
+  general_file_path <- "../Documents/Fall Quarter 2020/Shaping the Future of the Bay/PG&E_Data/"
+  file_path <-
+    paste0(
+      general_file_path,
+      type,
+      "/"
+    )
+  for(year in years) {
+    
+    for(quarter in quarters) {
+      if(year == 2020) {
+        if(quarter == 3||quarter == 4) {
+          next
+        }
+      }
+      
+      filename <- 
+        paste0(
+          file_path,
+          "PGE_",
+          year,
+          "_Q",
+          quarter,
+          "_",
+          type,
+          "UsageByZip.csv"
+        )
+      
+      temp <- NULL
+      if(file.exists(filename)) {
+        temp <- read.csv(filename)
+      }
+      file_object <- rbind(file_object, temp)
+      print(file_object)
+    }
+  }
+  return(file_object)
+}
+```
+```{r}
+# save_data <- function(type, file_object){
+#   file_name <-
+#     paste0(
+#       "pge_",
+#       tolower(type),
+#       ".rds"
+#     )
+#   saveRDS(file_object, file = file_name)
+# }
+```
+```{r read gas}
+pge_gas <- NULL
+pge_gas <- read_data_with_type("Gas", pge_gas)
+#save_data("Gas", pge_gas)
+```
+```{r}
+pge_electric <- NULL
+pge_electric <- read_data_with_type("Electric", pge_electric)
+#save_data("Electric", pge_electric)
+```
+```{r}
+names(pge_electric)
+names(pge_gas)
+```
+```{r}
+#selects only the relevant columns of data for the assignment
+library(dplyr)
+
+pge_gas_select <-
+  select(
+    pge_gas,
+    ZIPCODE,
+    MONTH,
+    YEAR,
+    CUSTOMERCLASS,
+    TOTALTHM
+  )
+
+pge_electric_select <-
+  select(
+    pge_electric,
+    ZIPCODE,
+    MONTH,
+    YEAR,
+    CUSTOMERCLASS,
+    TOTALKWH  
+  )
+```
+```{r}
+#Gets the bay county zips
+library(sf)
+library(tigris)
+library(leaflet)
+
+ca_counties <- counties("CA", cb = T, progress_bar = F)
+
+bay_county_names <-
+  c(
+    "Alameda",
+    "Contra Costa",
+    "Marin",
+    "Napa",
+    "San Francisco",
+    "San Mateo",
+    "Santa Clara",
+    "Solano",
+    "Sonoma"
+  )
+
+bay_counties <-
+  ca_counties %>%
+  filter(NAME %in% bay_county_names)
+
+usa_zips <-
+  zctas(cb = T, progress_bar = F)
+
+bay_zips <-
+  usa_zips %>%
+  st_centroid() %>%
+  .[bay_counties, ] %>%
+  st_set_geometry(NULL) %>%
+  left_join(usa_zips %>% select(GEOID10)) %>%
+  st_as_sf()
+```
+```{r}
+ca_cities <- places("CA", cb = T, progress_bar = FALSE)
+bay_cities <- ca_cities[bay_counties, ]
+
+bay_cities_within <-
+  ca_cities %>% 
+  st_centroid() %>% 
+  .[bay_counties, ] %>% 
+  st_set_geometry(NULL) %>% 
+  left_join(ca_cities %>% select(GEOID)) %>% 
+  st_as_sf()
+```
+```{r}
+#filters down each dataset to just residential and commercial rows of data
+
+pge_electric_filter <-
+  filter(
+    pge_electric_select,
+    CUSTOMERCLASS %in%
+      c(
+        "Elec- Residential",
+        "Elec- Commercial"
+      )
+  )
+
+pge_gas_filter <-
+  filter(
+    pge_gas_select,
+    CUSTOMERCLASS %in%
+      c(
+        "Gas- Residential",
+        "Gas- Commercial"
+      )
+  )
+```
+```{r}
+#extracts only the data with zip codes from the bay area
+pge_electric_bay <-
+  pge_electric_filter %>%
+  mutate(
+    ZIPCODE = ZIPCODE %>% as.character(),
+    TOTALKWH = gsub(",","", TOTALKWH),
+    TOTALKWH = TOTALKWH %>% as.numeric()
+  ) %>%
+  right_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  )
+
+pge_gas_bay <-
+  pge_gas_filter %>%
+  mutate(
+    ZIPCODE = ZIPCODE %>% as.character(),
+    TOTALTHM = gsub(",", "", TOTALTHM),
+    TOTALTHM = TOTALTHM %>% as.numeric()
+  ) %>%
+  right_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  )
+```
+```{r}
+library(dplyr)
+
+#groups the data into months and customer class, and converts from THM to kBTUs for gas, and kWhs to kBTUs for electric
+
+thm_to_kbtu <- 99.976
+kwh_to_kbtu <- 3.412
+
+pge_gas_group <-
+  group_by(
+    pge_gas_bay,
+    YEAR,
+    MONTH,
+    CUSTOMERCLASS,
+    ZIPCODE
+  )
+
+pge_gas_summarize <-
+  summarize(
+    pge_gas_group,
+    TOTALTHM =
+      sum(
+        TOTALTHM,
+        na.rm = T
+      ),
+    #ZIPCODE,
+    geometry
+  )
+
+pge_gas_converted <-
+  mutate(
+    pge_gas_summarize,
+    TOTALKBTU =
+      TOTALTHM*thm_to_kbtu
+  )
+
+pge_electric_group <-
+  group_by(
+    pge_electric_bay,
+    YEAR,
+    MONTH,
+    CUSTOMERCLASS,
+    ZIPCODE
+  )
+
+pge_electric_summarize <-
+  summarize(
+    pge_electric_group,
+    TOTALKWH =
+      sum(
+        TOTALKWH,
+        na.rm = T
+      ),
+    #ZIPCODE,
+    geometry
+  )
+
+pge_electric_converted <-
+  mutate(
+    pge_electric_summarize,
+    TOTALKBTU =
+      TOTALKWH*kwh_to_kbtu
+  )
+```
+```{r}
+
+pge_gas_final <-
+  select(
+    pge_gas_converted,
+    -TOTALTHM
+  )
+
+pge_electric_final <-
+  select(
+    pge_electric_converted,
+    -TOTALKWH
+  )
+```
+```{r}
+#adds a date collumn that combines the month and the year
+gas_with_date <-
+  mutate(
+    pge_gas_final,
+    DATE =
+        gsub(
+          ' ',
+          '',
+          paste(
+            as.character(MONTH),
+            '/',
+            as.character(YEAR)
+          )
+      )
+  )
+```
+```{r}
+#defines a function that converts columns month and year to a single column: date
+month_year_to_date <- function(data_frame) {
+  data_frame %>%
+    group_by(
+      YEAR,
+      MONTH
+    ) %>%
+    mutate(
+      DATE =
+        gsub(
+          ' ',
+          '',
+          paste(
+            as.character(MONTH),
+            '/',
+            as.character(YEAR)
+          )
+        )
+    )
+}
+```
+```{r}
+#splits the data into separate data frames for commercial and residential
+pge_gas_split <- 
+  split(
+    pge_gas_final,
+    pge_gas_final$CUSTOMERCLASS
+  )
+
+pge_gas_commercial <- pge_gas_split[[1]]
+pge_gas_residential <- pge_gas_split[[2]]
+
+pge_electric_split <-
+  split(
+    pge_electric_final,
+    pge_electric_final$CUSTOMERCLASS
+  )
+
+pge_electric_commercial <- pge_electric_split[[1]]
+pge_electric_residential <- pge_electric_split[[2]]
+```
+```{r}
+#combines all the data into a single data frame
+pge_commercial_combined <-
+  rbind(pge_gas_commercial, pge_electric_commercial)
+
+pge_residential_combined <-
+  rbind(pge_gas_residential, pge_electric_residential)
+```
+```{r}
+#replace month and year columns with date
+pge_commercial_final <- month_year_to_date(pge_commercial_combined)
+pge_residential_final <- month_year_to_date(pge_residential_combined)
+```
+```{r}
+#plotting the commercial chart using ggplot2
+library(plotly)
+pge_commercial_chart <-
+  pge_commercial_final %>%
+  ggplot() +
+  geom_bar(
+    aes(
+      x = DATE %>% factor(),
+      y = TOTALKBTU,
+      fill = CUSTOMERCLASS
+    ),
+    stat = "identity",
+    position = "stack"
+  ) + 
+  labs(
+    x = "Month/Year",
+    y = "kWh"
+  )
+pge_commercial_chart
+pge_commercial_chart %>% ggplotly()
+
+```
+```{r}
+residential_month_columns <-
+  pge_residential_final %>%
+  group_by(
+    YEAR,
+    CUSTOMERCLASS,
+    MONTH
+  ) %>%
+  summarize(
+    TOTALKBTU = sum(TOTALKBTU, na.rm = T)
+  ) %>%
+  pivot_wider(
+    names_from = MONTH,
+    values_from = TOTALKBTU
+  ) #%>%
+  #ungroup()
+
+# names(residential_month_columns)[names(residential_month_columns) == "1"] <- "January"
+ names(residential_month_columns)[names(residential_month_columns) == "2"] <- "February"
+ names(residential_month_columns)[names(residential_month_columns) == "3"] <- "March"
+ names(residential_month_columns)[names(residential_month_columns) == "4"] <- "April"
+ names(residential_month_columns)[names(residential_month_columns) == "5"] <- "May"
+
+residential_critical_months <-
+  residential_month_columns %>%
+  select(
+    February,
+    March,
+    April,
+    May
+    #starts_with("2/") | starts_with("3/") |starts_with("4/")
+  ) %>%
+  pivot_longer(
+    c("February", "March", "April", "May"),
+    names_to = "MONTH",
+    values_to = "TOTALKBTU"
+  )
+
+```
+Below, energy usage is plotted through the critical months during which the most stringent shelter in place measures took place in 2020. This comparison suggests a slight covid induced increase in residential energy usage during the month of April. Although residential energy usage decreased in April as opposed to March, as can be seen by patterns across these months in previous years, this drop from March to April is normal. In fact, the drop from March to April in 2020 looks to be relatively smaller than ia has been in previous years. Further, the drop from April to May (when the most stringent measures of shelter in place were released in the bay area) looks to have increased in relation to other years. However, this potential covid-induced increase in the month of April is not dramatic. Further, the unusually high recorded residential energy usage in February of 2019 suggests that there may be some inaccuracies in this dataset. 
+```{r}
+ggplot_residential_critical_months <-
+  residential_critical_months %>%
+  mutate(MONTH = fct_relevel(MONTH, "February", "March", "April", "May")) %>%
+  ggplot() +
+  geom_bar(
+    aes(
+      x = YEAR %>% factor(),
+      y = TOTALKBTU,
+      fill = MONTH,
+    ),
+    stat = "identity",
+    position = "dodge"
+  ) +
+  labs(
+    x = "Date",
+    y = "kBTU",
+    title = "PG&E residential energy usage critical months",
+    fill = "Electricity TYpe"
+  )
+ggplot_residential_critical_months
+```
+```{r}
+plotly_residential_critical_months <- plot_ly() %>%
+  add_trace(
+    data = residential_critical_months %>% filter(CUSTOMERCLASS == "Elec- Residential"),
+    x = ~YEAR %>% factor(),
+    y = ~February,
+    type = "bar",
+    name = "Electric"
+  ) %>%
+  add_trace(
+    data = residential_critical_months %>% filter(CUSTOMERCLASS == "Gas- Residential"),
+    x = ~YEAR %>% factor(),
+    y = ~February,
+    type = "bar",
+    name = "Gas"
+  ) %>%
+  add_trace(
+    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Elec- Residential"),
+    x = ~YEAR %>% factor(),
+    y = ~March,
+    type = "bar",
+    name = "Electric"
+  ) %>%
+  add_trace(
+    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Gas- Commercial"),
+    x = ~YEAR %>% factor(),
+    y = ~March,
+    type = "bar",
+    name = "Gas"
+  ) %>%
+  add_trace(
+    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Elec- Residential"),
+    x = ~YEAR %>% factor(),
+    y = ~April,
+    type = "bar",
+    name = "Electric"
+  ) %>%
+  add_trace(
+    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Gas- Commercial"),
+    x = ~YEAR %>% factor(),
+    y = ~April,
+    type = "bar",
+    name = "Gas"
+  ) %>%
+  layout(
+    xaxis = list(
+      title = "Date",
+      fixedrange = T,
+      categoryorder = "array",
+      categoryarray = ~date
+    ),
+    yaxis = list(
+      title = "kBTU",
+      fixedrange = T
+    ),
+    title = "Residential Energy Usage in Critical Months (PG&E)",
+    barmode = "stack",
+    legend = list(title = list(text = "Energy Type"))
+  ) %>%
+  config(displayModeBar = F)
+
+plotly_residential_critical_months
+```
+This bar chart shows the total monthly power usage in residential buildings in the Bay Area from January 2017 to June 2020 as reported by PG&E data. Since PG&E holds a monopoly as a gas and electricity provider, the assumption made is that their customers cover the majority of gas and electricity usage in the bay area. However, there may well be electricity usage that is not picked up by this data because it may well be privately or locally generated (through solar panels etc). In addition, there is the potential that some of this data is unclean. For example, September of 2017 looks like a significant anomaly, and is probably an innacuracy. 
+
+However, when plotted over time, the data provides useful insight into monthly fluctuations, as well as changing trends over the years. For example, we can see that residential power usage tends to increase from november, peaking over the months of December, January, and February, and starting to fall around March, dropping low around April, and staying at its lowest during the months of May, June, July, August, and September.
+
+There is a possibility looking at these bars (and it would make sense given increased time spent at home due to lockdown measures) that overall residential power usage has not decreased as much as usual during April of 2020. In order to investigate this further, we will examine the total power usage during the critical months surrounding the strictest shelter in place measures, comparing them with similar time frames in previous years.
+```{r}
+#plotting the residential chart using plotly
+plotly_residential_chart <- plot_ly() %>%
+  add_trace(
+    data = pge_residential_final %>% filter(CUSTOMERCLASS == "Elec- Residential"),
+    x = ~DATE %>% factor(),
+    y = ~TOTALKBTU,
+    type = "bar",
+    name = "Electric"
+  ) %>%
+  add_trace(
+    data = pge_residential_final %>% filter(CUSTOMERCLASS == "Gas- Residential"),
+    x = ~DATE %>% factor(),
+    y = ~TOTALKBTU,
+    type = "bar",
+    name = "Gas"
+  ) %>%
+  layout(
+    xaxis = list(
+      title = "Date",
+      fixedrange = T,
+      categoryorder = "array",
+      categoryarray = ~date
+    ),
+    yaxis = list(
+      title = "kBTU",
+      fixedrange = T
+    ),
+    title = "Residential Energy Usage in the Bay Area (PG&E)",
+    barmode = "stack",
+    legend = list(title = list(text = "Energy Type"))
+  ) %>%
+  config(displayModeBar = F)
+
+plotly_residential_chart
+```
+This bar chart shows the total monthly power usage in commercial buildings from the years 2017-2020. The same assumptions made about the residential data also applies to this commercial data. The month of September, 2017 represents a clear anomaly in this dataset as well. Similar to residential power usage, we can see that in previous years, the power usage is higher during the winter months of December, January, and February before starting to fall in March, and sitting generally lower in April through September. However, we can see that in April, May, and June of 2020, commercial power usage drops more than usual. It is likely (but again an assumption) that this can be causally attributed to the Covid induced shelter in place measures. Since businesses were strongly encouraged to send non essential workers home and cease nonessential in person activities, it makes sense that commercial buildings would use less energy. Although measures relaxed somewhat in May, commercial activity was not fully restored, and this is reflected in maintained low levels of commercial usage through June.
+```{r}
+#plotting the commerical chart using plotly
+plotly_commercial_chart <- plot_ly() %>%
+  add_trace(
+    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Elec- Commercial"),
+    x = ~DATE %>% factor(),
+    y = ~TOTALKBTU,
+    type = "bar",
+    name = "Electric"
+  ) %>%
+  add_trace(
+    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Gas- Commercial"),
+    x = ~DATE %>% factor(),
+    y = ~TOTALKBTU,
+    type = "bar",
+    name = "Gas"
+  ) %>%
+  layout(
+    xaxis = list(
+      title = "Date",
+      fixedrange = T,
+      categoryorder = "array",
+      categoryarray = ~date
+    ),
+    yaxis = list(
+      title = "kBTU",
+      fixedrange = T
+    ),
+    title = "Commercial Energy Usage in the Bay Area (PG&E)",
+    barmode = "stack",
+    legend = list(title = list(text = "Energy Type"))
+  ) %>%
+  config(displayModeBar = F)
+
+plotly_commercial_chart
+```
+```{r}
+library(tidyverse)
+library(sf)
+library(tigris)
+library(leaflet)
+
+leaflet() %>% 
+  addTiles() %>% 
+  addPolygons(
+    data = ca_counties %>% 
+      st_transform(4326)
+  ) %>%
+  addMarkers(
+    data = ca_counties %>% 
+      st_centroid() %>%
+      st_transform(4326)
+  )
+```
+```{r}
+pge_residential_electric_bay_KWH <-
+  pge_electric_bay %>%
+  filter(CUSTOMERCLASS == "Elec- Residential") %>%
+  mutate(
+    ZIPCODE = ZIPCODE %>% as.character()
+  ) %>%
+  group_by(ZIPCODE) %>% 
+  summarize(
+    TOTALKWH = sum(TOTALKWH, na.rm = T)
+  ) %>% 
+  right_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  ) %>%
+  st_as_sf() %>% 
+  st_transform(4326)
+
+res_pal <- colorNumeric(
+  palette = "Greens",
+  domain =
+    pge_residential_electric_bay_KWH$TOTALKWH
+)
+
+leaflet() %>%
+  addTiles() %>%
+  addPolygons(
+    data = pge_residential_electric_bay_KWH,
+    fillColor = ~res_pal(TOTALKWH),
+    color = "white",
+    opacity = 0.5,
+    weight = 1,
+    fillOpacity = 0.5,
+    label = ~paste0(
+      round(TOTALKWH),
+      " kWh total in ",
+      ZIPCODE
+    ),
+    highlightOptions = highlightOptions(
+      weight = 3,
+      opacity = 1
+    )
+  ) %>%
+  addLegend(
+    data = pge_residential_electric_bay_KWH,
+    pal = res_pal,
+    values = ~TOTALKWH,
+    title = "Total Residential<br>kWh, 2017 - 2020"
+  )
+```
+```{r}
+pge_residential_electric_bay_KBTU <-
+  pge_electric_converted %>%
+  filter(CUSTOMERCLASS == "Elec- Residential") %>%
+  mutate(
+    ZIPCODE = ZIPCODE %>% as.character()
+  ) %>%
+  group_by(ZIPCODE) %>% 
+  summarize(
+    TOTALKBTU = sum(TOTALKBTU, na.rm = T)
+  ) %>% 
+  right_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  ) %>%
+  st_as_sf() %>% 
+  st_transform(4326)
+
+res_pal <- colorNumeric(
+  palette = "Greens",
+  domain =
+    pge_residential_electric_bay_KBTU$TOTALKTU
+)
+
+leaflet() %>%
+  addTiles() %>%
+  addPolygons(
+    data = pge_residential_electric_bay_KBTU,
+    fillColor = ~res_pal(TOTALKBTU),
+    color = "white",
+    opacity = 0.5,
+    weight = 1,
+    fillOpacity = 0.5,
+    label = ~paste0(
+      round(TOTALKBTU),
+      " kBTU total in ",
+      ZIPCODE
+    ),
+    highlightOptions = highlightOptions(
+      weight = 3,
+      opacity = 1
+    )
+  ) %>%
+  addLegend(
+    data = pge_residential_electric_bay_KBTU,
+    pal = res_pal,
+    values = ~TOTALKBTU,
+    title = "Total Residential<br>kBTU, 2017 - 2020"
+  )
+```
+```{r}
+residential_electric_pre_post_covid <-
+  pge_electric_converted %>%
+  filter(
+    YEAR %in% c("2019", "2020"),
+    CUSTOMERCLASS %in% c("Elec- Residential")
+  ) %>%
+  group_by(
+    MONTH,
+    YEAR,
+    ZIPCODE
+  ) %>%
+  summarize(
+    TOTALKBTU =
+      sum(
+        TOTALKBTU,
+        na.rm = T
+      )
+  ) %>%
+  pivot_wider(
+    names_from = YEAR,
+    values_from = TOTALKBTU
+  )
+
+commercial_electric_pre_post_covid <-
+  filter(
+    pge_electric_converted,
+    YEAR %in% c("2019", "2020"),
+    CUSTOMERCLASS %in% c("Elec- Commercial")
+  ) %>%
+  group_by(
+    MONTH,
+    YEAR,
+    ZIPCODE
+  ) %>%
+  summarize(
+    TOTALKBTU =
+      sum(
+        TOTALKBTU,
+        na.rm = T
+      )
+  ) %>%
+  pivot_wider(
+    names_from = YEAR,
+    values_from = TOTALKBTU
+  )
+
+names(residential_electric_pre_post_covid)[names(residential_electric_pre_post_covid) == "2019"] <- "NINETEEN"
+names(residential_electric_pre_post_covid)[names(residential_electric_pre_post_covid) == "2020"] <- "TWENTY"
+
+names(commercial_electric_pre_post_covid)[names(commercial_electric_pre_post_covid) == "2019"] <- "NINETEEN"
+names(commercial_electric_pre_post_covid)[names(commercial_electric_pre_post_covid) == "2020"] <- "TWENTY"
+
+commercial_electric_percent_change <-
+  mutate(
+    commercial_electric_pre_post_covid,
+    PERCENTCHANGE = ((TWENTY-NINETEEN)/NINETEEN)*100,
+    na.rm = T
+  )
+
+residential_electric_percent_change <-
+  mutate(
+    residential_electric_pre_post_covid,
+    PERCENTCHANGE = ((TWENTY-NINETEEN)/NINETEEN)*100,
+    na.rm = T
+  )
+```
+This map displays changes in levels electric power used in residential buildings within the 9 bay area counties between the Spring months (March, April, May) of 2019 and 2020. Areas that are shown in green showed an increase in the percent of power used in 2020, whereas areas shown in red decreased their electric power usage. Across the board, residential electricity usage appears to have increased. This is not surprising given the fact that covid 19 and shelter in place policies have prompted a shift to more time spent at home, increasing the quantity of electricity used at home. However, there may be other factors that have contributed to this increase which are not controlled for in this data, including residential population growth.
+```{r}
+spring_months <- c("3", "4", "5")
+
+residential_electric_covid_change <-
+  residential_electric_percent_change[is.finite(residential_electric_percent_change$PERCENTCHANGE),] %>%
+  filter(MONTH %in% spring_months) %>%
+  mutate(
+    ZIPCODE = ZIPCODE %>% as.character()
+  ) %>%
+  group_by(ZIPCODE) %>% 
+  mutate(
+    PERCENTCHANGE = mean(PERCENTCHANGE, na.rm = T)
+  ) %>% 
+  right_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  ) %>%
+  st_as_sf() %>% 
+  st_transform(4326)
+
+residential_pal <- colorNumeric(
+  palette = c("Red", "White", "Green"),
+  domain = c(-60, 0, 60),
+)
+    #residential_electric_covid_change$PERCENTCHANGE
+
+leaflet() %>%
+  addTiles() %>%
+  addPolygons(
+    data = residential_electric_covid_change,
+    fillColor = ~res_pal(PERCENTCHANGE),
+    color = "white",
+    opacity = 0.5,
+    weight = 1,
+    fillOpacity = 0.5,
+    label = ~paste0(
+      PERCENTCHANGE,
+      " % change in electricity usage in ",
+      ZIPCODE
+    ),
+    highlightOptions = highlightOptions(
+      weight = 3,
+      opacity = 1
+    )
+  ) %>%
+  addLegend(
+    data = residential_electric_covid_change,
+    pal = residential_pal,
+    values = ~PERCENTCHANGE,
+    title = "Change in residential electric power usage between the springs of 2019 and 2020<br>%"
+  )
+```
+This map displays changes in levels electric power used in commercial buildings within the 9 bay area counties between the Spring months (March, April, May) of 2019 and 2020. Areas that are shown in green showed an increase in the percent of power used in 2020, whereas areas shown in red decreased their electric power usage. In many areas, commercial electricity usage appears to have decreased. This could be explained by the fact that Covid-induced Shelter-in-Place provisions (which began in mid march) have caused the majority of commercial entities to send their employees home, either to work from home, or not to work at all. Post codes that exhibited the greatest decrease included Cazadero (95421). There were, however, some exceptions that actually increased in commercial electricity usage. These included Hayward (94545), Cupertino (95014), Oakland (94601), and Point Reyes Station (94956). The data actually reports quite significant (over 100%) reports of increases in commercial energy use in these postcodes. This could be due to imperfect data, or it could be explained by the fact that these regions contained specific essential businesses that actually increased their production during the pandemic. For example, Point Reyes Station contains some agricultural businesses that may well have continued to produce during the lock down. Other potential explanations could be that commercial buildings replaced some of their gas usage with electricity during the year 2020 to the extent that the increase in electricity usage overrode the impacts of the lockdown on overall energy use. 
+```{r}
+commercial_electric_covid_change <-
+  commercial_electric_percent_change[is.finite(commercial_electric_percent_change$PERCENTCHANGE),] %>%
+  filter(MONTH %in% spring_months) %>%
+  mutate(
+    ZIPCODE = ZIPCODE %>% as.character()
+  ) %>%
+  group_by(ZIPCODE) %>% 
+  mutate(
+    PERCENTCHANGE = mean(PERCENTCHANGE, na.rm = T)
+  ) %>% 
+  right_join(
+    bay_zips %>% select(GEOID10),
+    by = c("ZIPCODE" = "GEOID10")
+  ) %>%
+  st_as_sf() %>% 
+  st_transform(4326)
+
+commercial_pal <- colorNumeric(
+  palette = c("Red", "White", "Green"),
+  domain = c(-200, 0, 200),
+)
+
+leaflet() %>%
+  addTiles() %>%
+  addPolygons(
+    data = commercial_electric_covid_change,
+    fillColor = ~commercial_pal(PERCENTCHANGE),
+    color = "white",
+    opacity = 0.5,
+    weight = 1,
+    fillOpacity = 0.5,
+    label = ~paste0(
+      PERCENTCHANGE,
+      " % change in electricity usage in ",
+      ZIPCODE
+    ),
+    highlightOptions = highlightOptions(
+      weight = 3,
+      opacity = 1
+    )
+  ) %>%
+  addLegend(
+    data = commercial_electric_covid_change,
+    pal = commercial_pal,
+    values = ~PERCENTCHANGE,
+    title = "Change in commercial electric power usage between the springs of 2019 and 2020<br>%"
+  )
+```
