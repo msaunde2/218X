@@ -11,28 +11,31 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 ```{r read function}
+
 knitr::opts_chunk$set(echo = TRUE)
 library(tidyverse)
 type_one <- "Electric"
 type_two <- "Gas"
-
-read_data_with_type <- function(type, file_object){
-  years <- 2017:2020
-  quarters <- 1:4
-  general_file_path <- "../Documents/Fall Quarter 2020/Shaping the Future of the Bay/PG&E_Data/"
+years <- 2017:2020
+quarters <- 1:4
+types <- c("Gas", "Electric")
+general_file_path <- "/Users/megsaunders/Documents/Fall Quarter 2020/Shaping the Future of the Bay/PG&E_Data/"
+file_object <- NULL
+pge_gas <- NULL
+pge_electric <- NULL
+  
+for(type in types) {
   file_path <-
-    paste0(
-      general_file_path,
-      type,
-      "/"
-    )
+  paste0(
+    general_file_path,
+    type,
+    "/"
+  )
   for(year in years) {
     
     for(quarter in quarters) {
       if(year == 2020) {
-        if(quarter == 3||quarter == 4) {
-          next
-        }
+        if (quarter == 3||quarter == 4) next
       }
       
       filename <- 
@@ -51,37 +54,16 @@ read_data_with_type <- function(type, file_object){
       if(file.exists(filename)) {
         temp <- read.csv(filename)
       }
-      file_object <- rbind(file_object, temp)
-      print(file_object)
+      if (type == "Gas") {
+        
+        pge_gas <- rbind(pge_gas, temp)
+      }
+      if (type == "Electric") {
+        pge_electric <- rbind(pge_electric, temp)
+      }
     }
   }
-  return(file_object)
 }
-```
-```{r}
-# save_data <- function(type, file_object){
-#   file_name <-
-#     paste0(
-#       "pge_",
-#       tolower(type),
-#       ".rds"
-#     )
-#   saveRDS(file_object, file = file_name)
-# }
-```
-```{r read gas}
-pge_gas <- NULL
-pge_gas <- read_data_with_type("Gas", pge_gas)
-#save_data("Gas", pge_gas)
-```
-```{r}
-pge_electric <- NULL
-pge_electric <- read_data_with_type("Electric", pge_electric)
-#save_data("Electric", pge_electric)
-```
-```{r}
-names(pge_electric)
-names(pge_gas)
 ```
 ```{r}
 #selects only the relevant columns of data for the assignment
@@ -229,7 +211,6 @@ pge_gas_summarize <-
         TOTALTHM,
         na.rm = T
       ),
-    #ZIPCODE,
     geometry
   )
 
@@ -257,7 +238,6 @@ pge_electric_summarize <-
         TOTALKWH,
         na.rm = T
       ),
-    #ZIPCODE,
     geometry
   )
 
@@ -391,8 +371,7 @@ residential_month_columns <-
   pivot_wider(
     names_from = MONTH,
     values_from = TOTALKBTU
-  ) #%>%
-  #ungroup()
+  )
 
 # names(residential_month_columns)[names(residential_month_columns) == "1"] <- "January"
  names(residential_month_columns)[names(residential_month_columns) == "2"] <- "February"
@@ -440,67 +419,8 @@ ggplot_residential_critical_months <-
 ggplot_residential_critical_months
 ```
 ```{r}
-plotly_residential_critical_months <- plot_ly() %>%
-  add_trace(
-    data = residential_critical_months %>% filter(CUSTOMERCLASS == "Elec- Residential"),
-    x = ~YEAR %>% factor(),
-    y = ~February,
-    type = "bar",
-    name = "Electric"
-  ) %>%
-  add_trace(
-    data = residential_critical_months %>% filter(CUSTOMERCLASS == "Gas- Residential"),
-    x = ~YEAR %>% factor(),
-    y = ~February,
-    type = "bar",
-    name = "Gas"
-  ) %>%
-  add_trace(
-    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Elec- Residential"),
-    x = ~YEAR %>% factor(),
-    y = ~March,
-    type = "bar",
-    name = "Electric"
-  ) %>%
-  add_trace(
-    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Gas- Commercial"),
-    x = ~YEAR %>% factor(),
-    y = ~March,
-    type = "bar",
-    name = "Gas"
-  ) %>%
-  add_trace(
-    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Elec- Residential"),
-    x = ~YEAR %>% factor(),
-    y = ~April,
-    type = "bar",
-    name = "Electric"
-  ) %>%
-  add_trace(
-    data = pge_commercial_final %>% filter(CUSTOMERCLASS == "Gas- Commercial"),
-    x = ~YEAR %>% factor(),
-    y = ~April,
-    type = "bar",
-    name = "Gas"
-  ) %>%
-  layout(
-    xaxis = list(
-      title = "Date",
-      fixedrange = T,
-      categoryorder = "array",
-      categoryarray = ~date
-    ),
-    yaxis = list(
-      title = "kBTU",
-      fixedrange = T
-    ),
-    title = "Residential Energy Usage in Critical Months (PG&E)",
-    barmode = "stack",
-    legend = list(title = list(text = "Energy Type"))
-  ) %>%
-  config(displayModeBar = F)
-
-plotly_residential_critical_months
+plotly_residential_critical_months <-
+  ggplot_residential_critical_months %>% ggplotly()
 ```
 This bar chart shows the total monthly power usage in residential buildings in the Bay Area from January 2017 to June 2020 as reported by PG&E data. Since PG&E holds a monopoly as a gas and electricity provider, the assumption made is that their customers cover the majority of gas and electricity usage in the bay area. However, there may well be electricity usage that is not picked up by this data because it may well be privately or locally generated (through solar panels etc). In addition, there is the potential that some of this data is unclean. For example, September of 2017 looks like a significant anomaly, and is probably an innacuracy. 
 
@@ -790,7 +710,6 @@ residential_pal <- colorNumeric(
   palette = c("Red", "White", "Green"),
   domain = c(-60, 0, 60),
 )
-    #residential_electric_covid_change$PERCENTCHANGE
 
 leaflet() %>%
   addTiles() %>%
